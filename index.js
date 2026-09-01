@@ -172,7 +172,7 @@ app.post("/chat", async (req, res) => {
         const completion =
             await client.chat.completions.create({
 
-                model: "llama-3.1-8b-instant",
+               model: "openai/gpt-oss-20b",
 
                 messages: messages,
 
