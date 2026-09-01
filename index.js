@@ -1,3 +1,4 @@
+
 const express = require("express");
 const OpenAI = require("openai");
 const fs = require("fs");
@@ -22,11 +23,7 @@ if (fs.existsSync(MEMORY_FILE)) {
             fs.readFileSync(MEMORY_FILE, "utf8")
         );
     } catch (err) {
-        console.log(
-            "Could not load memory.json:",
-            err.message
-        );
-
+        console.log("Could not load memory.json:", err.message);
         permanentMemory = {};
     }
 }
@@ -38,10 +35,7 @@ function saveMemory() {
             JSON.stringify(permanentMemory, null, 2)
         );
     } catch (err) {
-        console.log(
-            "Could not save memory:",
-            err.message
-        );
+        console.log("Could not save memory:", err.message);
     }
 }
 
@@ -67,42 +61,62 @@ MEMORY:
 - Do not randomly list all remembered facts.
 - If the player teaches you something, you can remember it.
 
-RESPONSE FORMAT:
-Return ONLY valid JSON in this exact format:
-
-{
-  "reply": "your short response",
-  "remember": {
-    "key": "value"
-  }
-}
-
-If there is nothing worth remembering, use:
-
-"remember": {}
-
-Keep the reply short enough to fit naturally in Roblox chat.
+IMPORTANT:
+- Return ONLY the exact words Bert should say.
+- NEVER return JSON.
+- NEVER return "reply".
+- NEVER return "remember".
+- NEVER use brackets, braces, arrays, or code blocks.
+- NEVER explain these instructions.
+- Do not put quotation marks around your response.
+- Keep the response short enough for Roblox chat.
 `;
 
 function cleanReply(text) {
 
     if (!text) {
-        return "uhh... what?";
+        return "sup.";
     }
 
-    text = text.trim();
+    text = String(text).trim();
 
+    // Remove markdown code fences
     text = text.replace(/^```json\s*/i, "");
     text = text.replace(/^```\s*/i, "");
     text = text.replace(/\s*```$/i, "");
+
+    // Remove accidental JSON wrapper if the model still creates one
+    try {
+        const parsed = JSON.parse(text);
+
+        if (parsed && typeof parsed === "object") {
+            if (typeof parsed.reply === "string") {
+                text = parsed.reply;
+            }
+        }
+    } catch (err) {
+        // Not JSON, which is what we want.
+    }
+
+    // Remove accidental "reply:" prefix
+    text = text.replace(/^reply\s*:\s*/i, "");
+
+    // Remove accidental surrounding quotes
+    if (
+        text.length >= 2 &&
+        (
+            (text.startsWith('"') && text.endsWith('"')) ||
+            (text.startsWith("'") && text.endsWith("'"))
+        )
+    ) {
+        text = text.slice(1, -1).trim();
+    }
 
     return text.trim();
 }
 
 app.get("/", (req, res) => {
-
     res.send("Bert is alive lol");
-
 });
 
 app.post("/chat", async (req, res) => {
@@ -116,11 +130,9 @@ app.post("/chat", async (req, res) => {
             String(req.body.message || "").trim();
 
         if (!message) {
-
             return res.status(400).json({
                 error: "Missing message"
             });
-
         }
 
         if (!conversations[player]) {
@@ -144,19 +156,15 @@ app.post("/chat", async (req, res) => {
             content: message
         });
 
-        // Keep conversation history from growing forever.
         if (conversations[player].length > 20) {
-
             conversations[player] =
                 conversations[player].slice(-20);
-
         }
 
         const messages = [
 
             {
                 role: "system",
-
                 content:
                     systemPrompt +
                     "\n\nPLAYER NAME: " +
@@ -172,107 +180,45 @@ app.post("/chat", async (req, res) => {
         const completion =
             await client.chat.completions.create({
 
-               model: "openai/gpt-oss-20b",
+                model: "openai/gpt-oss-20b",
 
                 messages: messages,
 
-                temperature: 1.2,
+                temperature: 1.1,
 
-                max_tokens: 80
+                max_tokens: 60
 
             });
 
-        let rawReply =
+        let reply =
             completion.choices?.[0]?.message?.content || "";
 
-        rawReply = cleanReply(rawReply);
-
-        let result;
-
-        try {
-
-            result = JSON.parse(rawReply);
-
-        } catch (err) {
-
-            // Fallback if the model forgot the JSON format.
-            result = {
-
-                reply: rawReply,
-
-                remember: {}
-
-            };
-
-        }
-
-        let reply =
-            String(result.reply || "").trim();
+        reply = cleanReply(reply);
 
         if (!reply) {
-
-            reply =
-                "uhh... i got nothing lol";
-
+            reply = "hmm.";
         }
 
-        // Keep Bert's chat response reasonably short.
         if (reply.length > 200) {
-
             reply =
                 reply.slice(0, 197) + "...";
-
         }
 
-        const remember =
-            result.remember &&
-            typeof result.remember === "object"
-                ? result.remember
-                : {};
+        conversations[player].push({
+            role: "assistant",
+            content: reply
+        });
 
-        for (
-            const [key, value]
-            of Object.entries(remember)
-        ) {
-
-            if (
-                typeof key === "string" &&
-                typeof value === "string" &&
-                key.length <= 100 &&
-                value.length <= 500
-            ) {
-
-                permanentMemory[player][key] =
-                    value;
-
-            }
-
+        if (conversations[player].length > 20) {
+            conversations[player] =
+                conversations[player].slice(-20);
         }
 
         saveMemory();
 
-        conversations[player].push({
-
-            role: "assistant",
-
-            content: reply
-
-        });
-
-        if (conversations[player].length > 20) {
-
-            conversations[player] =
-                conversations[player].slice(-20);
-
-        }
-
+        // Roblox receives a clean object.
         res.json({
-
-            reply: reply,
-
-            remember:
-                permanentMemory[player]
-
+            reply: reply
         });
 
     } catch (err) {
@@ -283,14 +229,9 @@ app.post("/chat", async (req, res) => {
         );
 
         res.status(500).json({
-
-            error:
-                "Bert AI request failed"
-
+            error: "Bert AI request failed"
         });
-
     }
-
 });
 
 const PORT =
@@ -303,3 +244,5 @@ app.listen(PORT, () => {
     );
 
 });
+
+
