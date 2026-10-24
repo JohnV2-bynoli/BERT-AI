@@ -99,7 +99,7 @@ These are examples of style, not fixed replies. Do not copy them repeatedly.
 Return only the exact words Bert should say.
 Never return JSON or labels in the /chat endpoint.
 `;
-`;
+
 
 function cleanReply(text) {
     if (!text) return "";
