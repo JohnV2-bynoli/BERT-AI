@@ -236,9 +236,12 @@ app.post("/chat", async (req, res) => {
             completion.choices?.[0]?.message?.content || ""
         );
 
-        if (!reply) {
-            reply = "uhh... my brain stopped working lol";
-        }
+     if (!reply) {
+    console.error("Bert AI returned an empty reply.");
+    return res.status(502).json({
+        error: "Bert generated an empty reply."
+    });
+}
 
         if (isRepeatedReply(player, reply)) {
             try {
