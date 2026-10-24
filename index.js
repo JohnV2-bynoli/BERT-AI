@@ -225,21 +225,45 @@ app.post("/chat", async (req, res) => {
             ...conversations[player]
         ];
 
-        let completion = await client.chat.completions.create({
+  let reply = "";
+
+for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+        const completion = await client.chat.completions.create({
             model: "openai/gpt-oss-20b",
-            messages,
-            temperature: 0.9,
-            max_tokens: 80
+            messages: [
+                ...messages,
+                ...(attempt > 1 ? [{
+                    role: "system",
+                    content: "Give a short, natural reply to the player's latest message. Return actual dialogue, not an empty response. Stay in Bert's established personality."
+                }] : [])
+            ],
+            temperature: attempt === 1 ? 0.9 : 1.0,
+            max_tokens: 100
         });
 
-        let reply = cleanReply(
+        reply = cleanReply(
             completion.choices?.[0]?.message?.content || ""
         );
 
-     if (!reply) {
-    console.error("Bert AI returned an empty reply.");
+        if (reply) {
+            break;
+        }
+
+        console.warn(`Bert received an empty reply (attempt ${attempt}/3).`);
+    } catch (err) {
+        console.error(`Bert request failed (attempt ${attempt}/3):`, err.message);
+    }
+
+    if (attempt < 3) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+    }
+}
+
+if (!reply) {
+    console.error("Bert could not generate a reply after 3 attempts.");
     return res.status(502).json({
-        error: "Bert generated an empty reply."
+        error: "Bert couldn't generate a reply. Please try again."
     });
 }
 
