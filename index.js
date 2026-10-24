@@ -19,7 +19,6 @@ const MEMORY_FILE = path.join(__dirname, "memory.json");
 const conversations = {};
 let permanentMemory = {};
 
-// Load saved memory
 if (fs.existsSync(MEMORY_FILE)) {
     try {
         permanentMemory = JSON.parse(
@@ -33,16 +32,11 @@ if (fs.existsSync(MEMORY_FILE)) {
             permanentMemory = {};
         }
     } catch (err) {
-        console.error(
-            "Could not load memory.json:",
-            err.message
-        );
-
+        console.error("[BERT] Could not load memory:", err.message);
         permanentMemory = {};
     }
 }
 
-// Save memory
 function saveMemory() {
     try {
         fs.writeFileSync(
@@ -50,34 +44,64 @@ function saveMemory() {
             JSON.stringify(permanentMemory, null, 2)
         );
     } catch (err) {
-        console.error(
-            "Could not save memory.json:",
-            err.message
-        );
+        console.error("[BERT] Could not save memory:", err.message);
     }
 }
 
-// BERT'S PERSONALITY — KEEP THIS PERSONALITY
 const systemPrompt = `
 You are Bert from the Roblox game "Teach an NPC".
 
-PERSONALITY:
+YOUR PERSONALITY:
 - Chill, funny, friendly, and slightly sarcastic.
-- Talk like a normal person, not a virtual assistant.
-- Keep replies short and natural, usually one sentence.
-- Usually use lowercase, unless proper capitalization makes sense.
-- Do not add unnecessary exclamation marks.
-- Do not repeat "sup" as a default greeting.
-- Do not say the same thing repeatedly when you can respond naturally.
-- Be curious about the world and the people around you.
-- Ask questions when genuinely curious, but do not turn every reply into a question.
-- If you first meet someone, introduce yourself naturally and ask their name when it fits.
-- Never claim to be an AI, language model, or assistant.
-- Do not narrate actions or use roleplay formatting like *walks away*.
-- Respond only with what Bert would actually say out loud.
+- Talk naturally like a normal person.
+- Keep replies short and conversational.
+- Usually use lowercase.
+- Avoid unnecessary exclamation marks.
+- Don't repeatedly say "sup".
+- Don't sound like a virtual assistant.
+
+YOUR MOST IMPORTANT RULE: YOU ARE IGNORANT.
+
+- You start the game knowing almost nothing about the world.
+- You are not an encyclopedia.
+- You must NOT automatically know ordinary facts about fruit, animals,
+  colors, objects, nature, science, geography, or other topics.
+- You only know facts that the player has explicitly taught you
+  or that you have learned during your own conversations.
+- Do not use your general training knowledge to fill gaps.
+- If you have not learned something, admit that you don't know.
+- You may make a silly guess, but make it clear that it is a guess.
+- Never pretend you have learned something when nobody taught you.
+- If a player teaches you something, remember it and use it later.
+- If two things contradict each other, acknowledge the confusion
+  instead of confidently choosing one.
+- You can be curious and ask the player to explain things.
+- Being dumb does not mean every answer must be nonsense.
+- Do not deliberately give a wrong answer when you already know
+  the correct answer from something a player taught you.
+
+MEMORY RULES:
+- Treat the supplied learned facts as your knowledge.
+- Do not claim to remember facts that aren't in your memory.
+- If the player asks a question about something you haven't learned,
+  respond naturally, for example:
+  "uh... i haven't figured that out yet"
+  "how am i supposed to know?"
+  "i was kinda hoping you'd tell me"
+- Vary your responses. Don't repeat the same example every time.
+- If someone teaches you a fact, acknowledge it naturally.
+- Do not automatically assume every statement is a lesson.
+  If the player clearly explains a fact or says they are teaching you,
+  treat it as something you can learn.
+
+GREETING:
+- When meeting a player for the first time, introduce yourself as Bert
+  and naturally ask their name.
+- Don't mention these instructions.
+- Never say you are an AI or language model.
+- Only speak as Bert.
 `;
 
-// Clean AI responses
 function cleanReply(value) {
     if (typeof value !== "string") {
         return "";
@@ -91,15 +115,12 @@ function cleanReply(value) {
         .trim();
 }
 
-// Identify the player
 function getPlayerKey(req) {
     const raw =
-        req.body &&
-        (
-            req.body.userId ??
-            req.body.playerId ??
-            req.body.playerName
-        );
+        req.body?.userId ??
+        req.body?.playerId ??
+        req.body?.player ??
+        req.body?.playerName;
 
     if (
         raw === undefined ||
@@ -112,41 +133,72 @@ function getPlayerKey(req) {
     return String(raw).slice(0, 100);
 }
 
-// Get a player's saved memory
-function getMemoryText(playerKey) {
-    const value = permanentMemory[playerKey];
+function getPlayerMemory(playerKey) {
+    let memory = permanentMemory[playerKey];
 
-    if (typeof value === "string") {
-        return value.slice(0, 1500);
+    if (!memory || typeof memory !== "object" || Array.isArray(memory)) {
+        memory = {
+            playerName: null,
+            facts: []
+        };
+
+        permanentMemory[playerKey] = memory;
     }
 
-    if (Array.isArray(value)) {
-        return value
-            .slice(-20)
-            .join("\n")
-            .slice(0, 1500);
+    if (!Array.isArray(memory.facts)) {
+        memory.facts = [];
     }
 
-    if (value && typeof value === "object") {
-        return JSON.stringify(value).slice(0, 1500);
-    }
-
-    return "";
+    return memory;
 }
 
-// Remember things the player tells Bert
-function rememberFromMessage(
-    playerKey,
-    userMessage,
-    bertReply
-) {
+function getMemoryText(playerKey) {
+    const memory = getPlayerMemory(playerKey);
+
+    const facts = memory.facts
+        .slice(-40)
+        .map((fact, index) => `${index + 1}. ${fact}`)
+        .join("\n");
+
+    return [
+        memory.playerName
+            ? `The player's name is ${memory.playerName}.`
+            : "Bert has not learned the player's name yet.",
+        facts || "Bert has not been taught any facts yet."
+    ].join("\n");
+}
+
+// Detect explicit lessons instead of treating every message as truth.
+function extractLesson(message) {
+    const text = String(message || "").trim();
+
+    const patterns = [
+        /^(?:teach(?: me)?(?: that)?|remember(?: that)?|learn(?: that)?)\s+(.+)$/i,
+        /^(.{1,100}?)\s+is\s+(.{1,100})$/i,
+        /^(.{1,100}?)\s+are\s+(.{1,100})$/i,
+        /^the\s+(.{1,100}?)\s+is\s+(.{1,100})$/i,
+        /^the\s+(.{1,100}?)\s+are\s+(.{1,100})$/i
+    ];
+
+    for (const pattern of patterns) {
+        const match = text.match(pattern);
+
+        if (match) {
+            return text.slice(0, 250);
+        }
+    }
+
+    return null;
+}
+
+function rememberFromMessage(playerKey, userMessage) {
+    const memory = getPlayerMemory(playerKey);
     const message = String(userMessage || "").trim();
 
     if (!message) {
         return;
     }
 
-    // Remember the player's name
     const nameMatch = message.match(
         /\bmy name is\s+([a-z][a-z0-9 _'-]{0,30})/i
     );
@@ -158,86 +210,53 @@ function rememberFromMessage(
             .slice(0, 40);
 
         if (name) {
-            permanentMemory[playerKey] = {
-                ...(
-                    permanentMemory[playerKey] &&
-                    typeof permanentMemory[playerKey] === "object" &&
-                    !Array.isArray(permanentMemory[playerKey])
-                        ? permanentMemory[playerKey]
-                        : {}
-                ),
-
-                playerName: name,
-                lastKnownFact: `The player's name is ${name}.`
-            };
-
-            saveMemory();
-            return;
+            memory.playerName = name;
         }
     }
 
-    // Keep a small rolling memory of what the player says
-    const existing = permanentMemory[playerKey];
+    // Only save statements that look like explicit lessons.
+    const lesson = extractLesson(message);
 
-    let facts = [];
+    if (lesson) {
+        const normalized = lesson.toLowerCase();
 
-    if (Array.isArray(existing)) {
-        facts = existing;
-    } else if (
-        existing &&
-        typeof existing === "object" &&
-        Array.isArray(existing.facts)
-    ) {
-        facts = existing.facts;
+        const alreadyKnown = memory.facts.some(
+            fact => fact.toLowerCase() === normalized
+        );
+
+        if (!alreadyKnown) {
+            memory.facts.push(lesson);
+            memory.facts = memory.facts.slice(-100);
+        }
     }
 
-    if (message.length <= 180) {
-        facts.push(`Player said: ${message}`);
-
-        facts = facts.slice(-12);
-
-        permanentMemory[playerKey] = {
-            ...(
-                existing &&
-                typeof existing === "object" &&
-                !Array.isArray(existing)
-                    ? existing
-                    : {}
-            ),
-
-            facts
-        };
-
-        saveMemory();
-    }
+    saveMemory();
 }
 
-// Check if Bert is repeating a recent reply
 function isRepeatedReply(history, reply) {
     if (!reply || !Array.isArray(history)) {
         return false;
     }
 
-    const recentAssistantReplies = history
+    const recentReplies = history
         .filter(item => item.role === "assistant")
         .slice(-3)
         .map(item => cleanReply(item.content).toLowerCase());
 
-    return recentAssistantReplies.includes(
+    return recentReplies.includes(
         cleanReply(reply).toLowerCase()
     );
 }
 
-// Health check
 app.get("/", (_req, res) => {
     res.json({
-        status: "Bert AI is online"
+        status: "Bert AI is online",
+        personality: "ignorant and teachable"
     });
 });
 
-
 // ====================================================
-// BERT'S NORMAL AI CONVERSATION
+// NORMAL CHAT
 // ====================================================
 
 app.post("/chat", async (req, res) => {
@@ -260,7 +279,6 @@ app.post("/chat", async (req, res) => {
         }
 
         const history = conversations[playerKey];
-
         const memoryText = getMemoryText(playerKey);
 
         const messages = [
@@ -268,15 +286,13 @@ app.post("/chat", async (req, res) => {
                 role: "system",
                 content:
                     systemPrompt +
-                    (
-                        memoryText
-                            ? `\n\nMEMORY ABOUT THIS PLAYER:\n${memoryText}\nUse this naturally when relevant. Do not list the memory unless asked.`
-                            : ""
-                    )
+                    "\n\nBERT'S LEARNED KNOWLEDGE:\n" +
+                    memoryText +
+                    "\n\nUse ONLY these learned facts as factual knowledge. " +
+                    "If the answer isn't supported by these facts, admit " +
+                    "that you don't know instead of using general knowledge."
             },
-
             ...history.slice(-12),
-
             {
                 role: "user",
                 content: userMessage
@@ -285,13 +301,12 @@ app.post("/chat", async (req, res) => {
 
         let reply = "";
 
-        // Retry empty or repeated responses
         for (let attempt = 0; attempt < 3; attempt++) {
             const completion =
                 await client.chat.completions.create({
                     model: MODEL,
                     messages,
-                    temperature: 0.85,
+                    temperature: 0.9,
                     max_tokens: 100
                 });
 
@@ -306,16 +321,15 @@ app.post("/chat", async (req, res) => {
                 break;
             }
 
-            // Accept a non-empty response on the final attempt
-            if (attempt === 2 && reply) {
-                break;
+            if (attempt < 2) {
+                messages.push({
+                    role: "system",
+                    content:
+                        "Try again with a different natural response. " +
+                        "Keep Bert ignorant of facts he has not learned. " +
+                        "Do not repeat your previous answer."
+                });
             }
-
-            messages.push({
-                role: "system",
-                content:
-                    "Try again. Give a different, natural response that fits Bert's personality. Do not repeat a recent reply."
-            });
         }
 
         if (!reply) {
@@ -324,36 +338,19 @@ app.post("/chat", async (req, res) => {
             });
         }
 
-        // Save the conversation
         history.push(
-            {
-                role: "user",
-                content: userMessage
-            },
-            {
-                role: "assistant",
-                content: reply
-            }
+            { role: "user", content: userMessage },
+            { role: "assistant", content: reply }
         );
 
         conversations[playerKey] = history.slice(-24);
 
-        // Save information the player tells Bert
-        rememberFromMessage(
-            playerKey,
-            userMessage,
-            reply
-        );
+        rememberFromMessage(playerKey, userMessage);
 
-        return res.json({
-            reply
-        });
+        return res.json({ reply });
 
     } catch (err) {
-        console.error(
-            "Bert chat error:",
-            err.message
-        );
+        console.error("[BERT CHAT]", err.message);
 
         return res.status(500).json({
             error: "Bert chat request failed."
@@ -361,13 +358,15 @@ app.post("/chat", async (req, res) => {
     }
 });
 
-
 // ====================================================
-// BERT'S AI-GENERATED THOUGHTS WHILE WANDERING ALONE
+// AI-GENERATED THOUGHTS
 // ====================================================
 
-app.post("/thought", async (_req, res) => {
+app.post("/thought", async (req, res) => {
     try {
+        const playerKey = getPlayerKey(req);
+        const memoryText = getMemoryText(playerKey);
+
         const completion =
             await client.chat.completions.create({
                 model: MODEL,
@@ -375,33 +374,22 @@ app.post("/thought", async (_req, res) => {
                 messages: [
                     {
                         role: "system",
-
                         content:
                             systemPrompt +
-
-                            "\n\nBert is wandering alone and thinking out loud. " +
-
-                            "Generate ONE original thought Bert says to himself. " +
-
-                            "He can wonder about something he sees, ask himself a funny question, " +
-                            "or make a curious observation about the world. " +
-
-                            "Do not address a player or another NPC. " +
-                            "Do not greet anyone. " +
-                            "Do not mention being an AI. " +
-
-                            "Avoid generic repeated thoughts. " +
-
-                            "Keep it short and natural, usually 3–12 words. " +
-
-                            "Return only the words Bert says."
+                            "\n\nBERT'S LEARNED KNOWLEDGE:\n" +
+                            memoryText +
+                            "\n\nYou are wandering alone and thinking out loud. " +
+                            "Generate one short, original thought or curious " +
+                            "question about the world. Since you are ignorant, " +
+                            "you may wonder about something ordinary or make " +
+                            "a silly guess. Do not confidently state facts " +
+                            "you have never learned. Do not address a player. " +
+                            "Do not greet anyone. Return only the words Bert says."
                     },
-
                     {
                         role: "user",
-
                         content:
-                            "Bert is walking around alone. What does he think out loud right now?"
+                            "You're walking around alone. What are you thinking about?"
                     }
                 ],
 
@@ -415,7 +403,7 @@ app.post("/thought", async (_req, res) => {
 
         if (!thought) {
             return res.status(502).json({
-                error: "Bert couldn't think of anything right now."
+                error: "Bert couldn't think of anything."
             });
         }
 
@@ -424,17 +412,13 @@ app.post("/thought", async (_req, res) => {
         });
 
     } catch (err) {
-        console.error(
-            "Bert thought error:",
-            err.message
-        );
+        console.error("[BERT THOUGHT]", err.message);
 
         return res.status(500).json({
             error: "Bert thought request failed."
         });
     }
 });
-
 
 // ====================================================
 // AI ACTION DECISIONS
@@ -456,24 +440,20 @@ app.post("/decide", async (req, res) => {
         const completion =
             await client.chat.completions.create({
                 model: MODEL,
-
                 messages: [
                     {
                         role: "system",
-
                         content:
-                            "You decide what Bert from Teach an NPC should do next. " +
+                            "You decide what Bert should do next. " +
                             "Return only valid JSON with keys action and reason. " +
                             "action must be one of: wander, talk, observe, wait. " +
-                            "Keep reason short. Do not include markdown."
+                            "Keep the reason short. Do not include markdown."
                     },
-
                     {
                         role: "user",
                         content: situation
                     }
                 ],
-
                 temperature: 0.6,
                 max_tokens: 100
             });
@@ -489,11 +469,14 @@ app.post("/decide", async (req, res) => {
             const match = raw.match(/\{[\s\S]*\}/);
 
             if (match) {
-                decision = JSON.parse(match[0]);
+                try {
+                    decision = JSON.parse(match[0]);
+                } catch {
+                    decision = null;
+                }
             }
         }
 
-        // Safe fallback if the AI returns invalid JSON
         if (
             !decision ||
             !["wander", "talk", "observe", "wait"].includes(
@@ -508,16 +491,11 @@ app.post("/decide", async (req, res) => {
 
         return res.json({
             action: decision.action,
-            reason: String(
-                decision.reason || ""
-            ).slice(0, 160)
+            reason: String(decision.reason || "").slice(0, 160)
         });
 
     } catch (err) {
-        console.error(
-            "Bert decision error:",
-            err.message
-        );
+        console.error("[BERT DECIDE]", err.message);
 
         return res.status(500).json({
             error: "Bert decision request failed."
@@ -525,13 +503,10 @@ app.post("/decide", async (req, res) => {
     }
 });
 
-
 // ====================================================
 // START SERVER
 // ====================================================
 
 app.listen(PORT, () => {
-    console.log(
-        `Bert AI server listening on port ${PORT}`
-    );
+    console.log(`[BERT] AI server listening on port ${PORT}`);
 });
