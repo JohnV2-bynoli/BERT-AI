@@ -1,3 +1,4 @@
+
 const express = require("express");
 const OpenAI = require("openai");
 const fs = require("fs");
@@ -27,7 +28,8 @@ if (fs.existsSync(MEMORY_FILE)) {
 
         if (
             !permanentMemory ||
-            typeof permanentMemory !== "object"
+            typeof permanentMemory !== "object" ||
+            Array.isArray(permanentMemory)
         ) {
             permanentMemory = {};
         }
@@ -284,7 +286,6 @@ FINAL RULES:
 - Your goal is to feel like a curious, clueless character who gradually
   learns about the world through experience.
 
-
 HOW YOU LEARN:
 - You begin the game knowing almost nothing about the world.
 - You do not automatically know what common foods, animals, objects, places, activities, or concepts are.
@@ -300,9 +301,7 @@ HOW YOU LEARN:
 - Be curious, but do not ask what every single word means. Focus on things you genuinely do not understand.
 - React to new information naturally. You can be confused, surprised, skeptical, or curious.
 - Do not immediately agree with a statement you do not understand.
-
 `;
-
 
 function cleanReply(value) {
     if (typeof value !== "string") {
@@ -370,7 +369,6 @@ function getMemoryText(playerKey) {
     ].join("\n");
 }
 
-// Detect explicit lessons instead of treating every message as truth.
 function extractLesson(message) {
     const text = String(message || "").trim();
 
@@ -416,7 +414,6 @@ function rememberFromMessage(playerKey, userMessage) {
         }
     }
 
-    // Only save statements that look like explicit lessons.
     const lesson = extractLesson(message);
 
     if (lesson) {
@@ -450,10 +447,31 @@ function isRepeatedReply(history, reply) {
     );
 }
 
+function logAIError(label, err) {
+    console.error(`[${label}] Request failed`);
+    console.error("Message:", err?.message || "Unknown error");
+
+    if (err?.status) {
+        console.error("HTTP status:", err.status);
+    }
+
+    if (err?.code) {
+        console.error("Error code:", err.code);
+    }
+
+    if (err?.error) {
+        console.error(
+            "Provider error:",
+            JSON.stringify(err.error)
+        );
+    }
+}
+
 app.get("/", (_req, res) => {
     res.json({
         status: "Bert AI is online",
-        personality: "ignorant and teachable"
+        personality: "ignorant and teachable",
+        model: MODEL
     });
 });
 
@@ -509,7 +527,7 @@ app.post("/chat", async (req, res) => {
                     model: MODEL,
                     messages,
                     temperature: 0.9,
-                    max_tokens: 100
+                    max_completion_tokens: 512
                 });
 
             reply = cleanReply(
@@ -535,6 +553,10 @@ app.post("/chat", async (req, res) => {
         }
 
         if (!reply) {
+            console.error(
+                "[BERT CHAT] The model returned an empty or repeated reply."
+            );
+
             return res.status(502).json({
                 error: "Bert couldn't think of a reply."
             });
@@ -549,10 +571,12 @@ app.post("/chat", async (req, res) => {
 
         rememberFromMessage(playerKey, userMessage);
 
+        console.log("[BERT CHAT] Reply generated successfully.");
+
         return res.json({ reply });
 
     } catch (err) {
-        console.error("[BERT CHAT]", err.message);
+        logAIError("BERT CHAT", err);
 
         return res.status(500).json({
             error: "Bert chat request failed."
@@ -596,7 +620,7 @@ app.post("/thought", async (req, res) => {
                 ],
 
                 temperature: 1.0,
-                max_tokens: 60
+                max_completion_tokens: 256
             });
 
         const thought = cleanReply(
@@ -604,17 +628,23 @@ app.post("/thought", async (req, res) => {
         );
 
         if (!thought) {
+            console.error(
+                "[BERT THOUGHT] The model returned an empty thought."
+            );
+
             return res.status(502).json({
                 error: "Bert couldn't think of anything."
             });
         }
+
+        console.log("[BERT THOUGHT] Thought generated successfully.");
 
         return res.json({
             thought: thought.slice(0, 180)
         });
 
     } catch (err) {
-        console.error("[BERT THOUGHT]", err.message);
+        logAIError("BERT THOUGHT", err);
 
         return res.status(500).json({
             error: "Bert thought request failed."
@@ -657,7 +687,7 @@ app.post("/decide", async (req, res) => {
                     }
                 ],
                 temperature: 0.6,
-                max_tokens: 100
+                max_completion_tokens: 256
             });
 
         const raw =
@@ -697,7 +727,7 @@ app.post("/decide", async (req, res) => {
         });
 
     } catch (err) {
-        console.error("[BERT DECIDE]", err.message);
+        logAIError("BERT DECIDE", err);
 
         return res.status(500).json({
             error: "Bert decision request failed."
@@ -711,4 +741,5 @@ app.post("/decide", async (req, res) => {
 
 app.listen(PORT, () => {
     console.log(`[BERT] AI server listening on port ${PORT}`);
+    console.log(`[BERT] Model: ${MODEL}`);
 });
