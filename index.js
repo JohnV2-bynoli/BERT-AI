@@ -7,7 +7,7 @@ const app = express();
 app.use(express.json({ limit: "32kb" }));
 
 const PORT = process.env.PORT || 3000;
-const MODEL = "qwen/qwen3.8-27b";
+const MODEL = "openai/gpt-oss-20b";
 
 const client = new OpenAI({
     apiKey: process.env.GROQ_API_KEY,
